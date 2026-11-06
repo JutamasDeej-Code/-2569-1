@@ -1,0 +1,633 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>รายงานกระแสเงินสด</title>
+<meta name="description" content="Dashboard กระแสเงินสดสำหรับผู้บริหารฝ่ายการเงิน อ่านจาก data/cashflow.xlsx อัตโนมัติ">
+<style>
+  /* ---------- สี (โทนเดียวกับชุดสีที่ตรวจผ่านแล้วทั้งโหมดสว่าง/มืด) ---------- */
+  :root {
+    color-scheme: light;
+    --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#6f6d68;
+    --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10); --band:rgba(11,11,11,.055);
+    --in:#2a78d6;      /* รับ */
+    --out:#eb6834;     /* จ่าย */
+    --plan:#898781;    /* แผน (สีเทา = ข้อมูลอ้างอิง) */
+    --fav:#2a78d6;     /* ดีกว่าแผน */
+    --unfav:#e34948;   /* แย่กว่าแผน */
+    --good-text:#006300; --bad-text:#c22f2f;
+    --warn-bg:#fff4d6; --warn-bar:#fab219; --err-bg:#fdeaea; --err-bar:#d03b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:#0d0d0d; --surface:#1a1a19; --ink:#f0efec; --ink2:#c3c2b7; --muted:#a09e97;
+      --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10); --band:rgba(255,255,255,.06);
+      --in:#3987e5; --out:#d95926; --plan:#898781; --fav:#3987e5; --unfav:#e66767;
+      --good-text:#3fcf3f; --bad-text:#ff8a8a;
+      --warn-bg:#3a3012; --warn-bar:#fab219; --err-bg:#3b1a1a; --err-bar:#e66767;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", "Leelawadee UI", "Noto Sans Thai", Tahoma, sans-serif;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 26px; line-height: 1.25; margin: 0; }
+  h2 { font-size: 17px; margin: 0 0 2px; }
+  .sub { color: var(--ink2); font-size: 14px; margin-top: 4px; }
+  .muted { color: var(--muted); }
+
+  /* ---------- หัวหน้า ---------- */
+  .top { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: flex-end; justify-content: space-between; margin-bottom: 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink2);
+          background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px; }
+  .chip.demo { color: var(--ink); border-color: var(--warn-bar); }
+  select, button, .filebtn {
+    font: inherit; font-size: 14px; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--axis); border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
+  select:hover, button:hover, .filebtn:hover { border-color: var(--ink2); }
+  :focus-visible { outline: 2px solid var(--in); outline-offset: 2px; }
+  label.sel { font-size: 14px; color: var(--ink2); display: inline-flex; gap: 8px; align-items: center; }
+
+  /* ---------- กล่องแจ้งเตือน ---------- */
+  .notice { border-radius: 8px; padding: 12px 16px; margin: 0 0 16px; border-left: 4px solid; font-size: 15px; }
+  .notice h3 { margin: 0 0 6px; font-size: 16px; }
+  .notice ul { margin: 6px 0 0; padding-left: 20px; }
+  .notice.err { background: var(--err-bg); border-color: var(--err-bar); }
+  .notice.warn { background: var(--warn-bg); border-color: var(--warn-bar); }
+  .notice.info { background: var(--surface); border-color: var(--in); border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); display:flex; gap:12px; justify-content:space-between; align-items:center; flex-wrap:wrap; }
+
+  /* ---------- สรุปหนึ่งประโยค ---------- */
+  .headline { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px; margin-bottom: 16px; font-size: 17px; }
+  .headline b { font-weight: 700; }
+
+  /* ---------- ตัวชี้วัด 5 ตัว ---------- */
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 16px; }
+  .tile { grid-column: span 1; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; min-width: 0; }
+  .tile.hero { grid-column: span 2; }
+  .tile .label { font-size: 14px; color: var(--ink2); }
+  .tile .val { font-size: 34px; line-height: 1.15; font-weight: 700; margin-top: 4px; letter-spacing: -.01em; }
+  .tile.hero .val { font-size: 56px; }
+  .tile .unit { font-size: 14px; font-weight: 400; color: var(--muted); margin-left: 6px; letter-spacing: 0; white-space: nowrap; }
+  .tile:not(.hero) .unit { display: block; margin: 2px 0 0; }
+  .nw { white-space: nowrap; }
+  .tile .delta { font-size: 14px; margin-top: 6px; font-weight: 600; }
+  .tile .note { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .good { color: var(--good-text); } .bad { color: var(--bad-text); } .flat { color: var(--ink2); }
+
+  /* ---------- การ์ดกราฟ ---------- */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; margin-bottom: 12px; }
+  .grid2 .card { margin-bottom: 0; }
+  .chartbox { position: relative; height: 300px; margin-top: 8px; }
+
+  /* ---------- กราฟแท่งผลต่างรายหมวด (HTML) ---------- */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink2); margin: 8px 0 10px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .vrow { display: grid; grid-template-columns: minmax(150px, 28%) 1fr 110px; gap: 12px; align-items: center; padding: 6px 4px; border-radius: 6px; }
+  .vrow:hover { background: var(--band); }
+  .vname { font-size: 14px; line-height: 1.35; }
+  .vname small { color: var(--muted); font-size: 12px; margin-right: 4px; }
+  .vtrack { position: relative; height: 18px; }
+  .vzero { position: absolute; top: -3px; bottom: -3px; width: 1px; background: var(--axis); }
+  .vbar { position: absolute; top: 2px; bottom: 2px; min-width: 3px; }
+  .vbar.pos { background: var(--fav); border-radius: 0 4px 4px 0; }
+  .vbar.neg { background: var(--unfav); border-radius: 4px 0 0 4px; }
+  .vval { text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---------- ตาราง ---------- */
+  .tablewrap { overflow-x: auto; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; white-space: normal; }
+  thead th { color: var(--ink2); font-weight: 600; border-bottom: 1px solid var(--axis); position: sticky; top: 0; background: var(--surface); }
+  tr.grp td { background: var(--band); font-weight: 700; text-align: left; }
+  tr.sum td { font-weight: 700; border-top: 1px solid var(--axis); }
+  tr.sel td { background: var(--band); }
+  details summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+
+  footer { margin-top: 24px; color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; justify-content: space-between; }
+  .filebtn input { display: none; }
+  .hidden { display: none !important; }
+
+  @media (max-width: 1000px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .tile.hero { grid-column: span 2; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .kpis { grid-template-columns: 1fr; }
+    .tile.hero { grid-column: span 1; }
+    .tile.hero .val { font-size: 48px; }
+    .vrow { grid-template-columns: 1fr 90px; }
+    .vrow .vtrack { grid-column: 1 / -1; grid-row: 2; }
+    h1 { font-size: 22px; }
+  }
+  @media print {
+    body { background: #fff; }
+    .controls, footer, details { display: none !important; }
+    .card, .tile, .headline { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <div>
+      <h1>รายงานกระแสเงินสด</h1>
+      <div class="sub" id="subtitle">กำลังโหลดข้อมูล…</div>
+    </div>
+    <div class="controls">
+      <span class="chip demo hidden" id="demoChip">ข้อมูลจำลองเพื่อการอบรม</span>
+      <span class="chip hidden" id="updChip"></span>
+      <label class="sel hidden" id="monthWrap">ดูเดือน
+        <select id="monthSel" aria-label="เลือกเดือนที่ต้องการดู"></select>
+      </label>
+    </div>
+  </div>
+
+  <div id="localBanner" class="notice info hidden">
+    <span id="localBannerText"></span>
+    <button type="button" id="backToWeb">กลับไปใช้ข้อมูลบนเว็บ</button>
+  </div>
+  <div id="errBox" class="notice err hidden" role="alert"></div>
+  <div id="warnBox" class="notice warn hidden"></div>
+
+  <main id="app" class="hidden">
+    <div class="headline" id="headline"></div>
+
+    <section class="kpis" id="kpis" aria-label="ตัวชี้วัดหลัก 5 ตัว"></section>
+
+    <section class="grid2">
+      <div class="card">
+        <h2>รับ–จ่ายจริงรายเดือน</h2>
+        <div class="sub">ล้านบาท · เส้น = กระแสเงินสดสุทธิ (รับ − จ่าย) · แถบเทา = เดือนที่เลือก</div>
+        <div class="chartbox"><canvas id="chFlow" role="img" aria-label="กราฟแท่งรับและจ่ายจริงรายเดือน พร้อมเส้นกระแสเงินสดสุทธิ"></canvas></div>
+      </div>
+      <div class="card">
+        <h2>เงินสดคงเหลือสิ้นเดือน: จริง vs แผน</h2>
+        <div class="sub">ล้านบาท · เริ่มจากยอดยกมาต้นปีงบประมาณ</div>
+        <div class="chartbox"><canvas id="chCash" role="img" aria-label="กราฟเส้นเงินสดคงเหลือสิ้นเดือน เทียบแผน"></canvas></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 id="varTitle">ผลต่างจากแผนรายหมวด</h2>
+      <div class="sub">ล้านบาท · เรียงจากแย่กว่าแผนมากที่สุดขึ้นก่อน</div>
+      <div class="legend">
+        <span><i style="background:var(--unfav)"></i>▼ แย่กว่าแผน (รับน้อยกว่าแผน / จ่ายเกินแผน)</span>
+        <span><i style="background:var(--fav)"></i>▲ ดีกว่าแผน (รับเกินแผน / จ่ายน้อยกว่าแผน)</span>
+      </div>
+      <div id="varRows"></div>
+    </section>
+
+    <section class="card">
+      <h2 id="catTitle">รายละเอียดรายหมวด</h2>
+      <div class="sub">หน่วย: บาท · ผลต่าง = จริง − แผน</div>
+      <div class="tablewrap"><table id="catTable"></table></div>
+    </section>
+
+    <section class="card">
+      <details>
+        <summary>ดูข้อมูลรายเดือนทั้งปีงบประมาณเป็นตาราง</summary>
+        <div class="tablewrap"><table id="monthTable"></table></div>
+      </details>
+    </section>
+  </main>
+
+  <footer>
+    <span id="srcNote">ที่มาข้อมูล: data/cashflow.xlsx</span>
+    <span>
+      <label class="filebtn">ทดสอบไฟล์ Excel ในเครื่องของฉัน
+        <input type="file" id="filePick" accept=".xlsx,.xlsm">
+      </label>
+    </span>
+  </footer>
+</div>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/chart.umd.js"></script>
+<script>
+"use strict";
+/* =====================================================================
+   ตั้งค่า (แก้ได้ตรงนี้)
+   ===================================================================== */
+const DATA_URL = "data/cashflow.xlsx";      // ไฟล์ข้อมูลบน GitHub Pages
+const SHOW_DEMO_NOTICE = true;               // true = แสดงป้าย "ข้อมูลจำลอง"; ใช้ข้อมูลจริงให้เปลี่ยนเป็น false
+const EXPECTED_HEADERS = ["เดือน", "ประเภท", "หมวด", "จริง (บาท)", "แผน (บาท)"];
+const TYPE_IN = "รับ", TYPE_OUT = "จ่าย";
+const TH_MONTHS = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+
+/* =====================================================================
+   ตัวช่วย
+   ===================================================================== */
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const fmtB = (n) => Math.round(n).toLocaleString("en-US");
+const fmtM = (n, d = 2) => (n / 1e6).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const sgnM = (n) => (n > 0 ? "+" : n < 0 ? "−" : "") + fmtM(Math.abs(n));
+const sgnB = (n) => (Math.round(n) > 0 ? "+" : Math.round(n) < 0 ? "−" : "") + fmtB(Math.abs(n));
+const colLetter = (i) => String.fromCharCode(65 + i);
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function monthLabel(ym, short) {            // "2026-09" -> "ก.ย. 2569" (พ.ศ.)
+  const [y, m] = ym.split("-").map(Number);
+  return TH_MONTHS[m - 1] + " " + (short ? String(y + 543).slice(-2) : y + 543);
+}
+function thDateTime(d) {
+  try { return d.toLocaleString("th-TH-u-ca-buddhist", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }); }
+  catch (e) { return d.toLocaleString(); }
+}
+
+/* =====================================================================
+   1) อ่านและตรวจไฟล์ Excel ตามกติกาในแผ่น "อ่านก่อน"
+   ===================================================================== */
+function parseWorkbook(wb) {
+  const errors = [], warnings = [];
+
+  // กติกาข้อ 2: ชื่อ sheet
+  for (const name of ["CashFlow", "Settings"]) {
+    if (!wb.SheetNames.includes(name)) {
+      errors.push(`ไม่พบ sheet ชื่อ "${name}" (ไฟล์นี้มี sheet: ${wb.SheetNames.map((s) => `"${s}"`).join(", ")})`);
+    }
+  }
+  if (errors.length) return { errors, warnings };
+
+  // Settings!B1 = ยอดเงินสดยกมา
+  const ws2 = wb.Sheets["Settings"];
+  const b1 = ws2["B1"];
+  let opening = null;
+  if (!b1 || b1.v === undefined || b1.v === null || b1.v === "") errors.push("Settings ช่อง B1 (ยอดเงินสดยกมาต้นปีงบประมาณ) ว่างอยู่");
+  else if (typeof b1.v !== "number" || !isFinite(b1.v)) errors.push(`Settings ช่อง B1 ต้องเป็นตัวเลข แต่พบ "${b1.v}"`);
+  else opening = b1.v;
+  const fundName = ws2["B2"] && ws2["B2"].v != null ? String(ws2["B2"].v) : "";
+  const fiscal = ws2["B3"] && ws2["B3"].v != null ? String(ws2["B3"].v) : "";
+
+  // sheet CashFlow
+  const ws = wb.Sheets["CashFlow"];
+  if (!ws["!ref"]) { errors.push('sheet "CashFlow" ว่างเปล่า'); return { errors, warnings }; }
+  const startRow = XLSX.utils.decode_range(ws["!ref"]).s.r;          // แถวแรกของข้อมูลใน sheet (0-based)
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: true });
+  const excelRow = (i) => startRow + i + 1;
+
+  // กติกาข้อ 3: หัวคอลัมน์
+  const head = rows[0] || [];
+  EXPECTED_HEADERS.forEach((exp, i) => {
+    const got = head[i] == null ? "" : String(head[i]).trim();
+    if (got !== exp) errors.push(`หัวคอลัมน์ ${colLetter(i)}${excelRow(0)} ต้องเป็น "${exp}" แต่พบ "${got || "(ว่าง)"}"`);
+  });
+  if (errors.length) return { errors, warnings };   // หัวผิด = ไม่อ่านต่อ ป้องกันตัวเลขเพี้ยน
+
+  const recs = [], seen = new Map();
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if ([0, 1, 2, 3, 4].every((c) => r[c] == null || String(r[c]).trim() === "")) continue;   // ข้ามแถวว่าง
+    const n = excelRow(i);
+    let ok = true;
+    const bad = (msg) => { errors.push(`แถว ${n}: ${msg}`); ok = false; };
+
+    // กติกาข้อ 4: เดือน = ข้อความ ปปปป-ดด
+    let month = r[0];
+    if (month instanceof Date) { bad("คอลัมน์ เดือน ถูกแปลงเป็นวันที่ ต้องเป็นข้อความรูปแบบ ปปปป-ดด เช่น 2026-08 (ตั้งรูปแบบเซลล์เป็น Text ก่อนพิมพ์)"); }
+    else {
+      month = month == null ? "" : String(month).trim();
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) bad(`เดือน "${month || "(ว่าง)"}" ต้องเป็นรูปแบบ ปปปป-ดด (ค.ศ.) เช่น 2026-08`);
+    }
+    // กติกาข้อ 5: ประเภท = รับ / จ่าย
+    const type = r[1] == null ? "" : String(r[1]).trim();
+    if (type !== TYPE_IN && type !== TYPE_OUT) bad(`ประเภท "${type || "(ว่าง)"}" ต้องเป็น "${TYPE_IN}" หรือ "${TYPE_OUT}" เท่านั้น`);
+    const cat = r[2] == null ? "" : String(r[2]).trim();
+    if (!cat) bad("คอลัมน์ หมวด ว่างอยู่");
+    // กติกาข้อ 6: จำนวนเงินเป็นตัวเลข
+    const nums = [];
+    [3, 4].forEach((c) => {
+      const v = r[c];
+      if (typeof v === "number" && isFinite(v)) nums.push(v);
+      else { nums.push(NaN); bad(`คอลัมน์ ${EXPECTED_HEADERS[c]} ต้องเป็นตัวเลข แต่พบ ${v == null ? "ช่องว่าง" : `"${v}"`}`); }
+    });
+    if (!ok) continue;
+
+    const key = month + "|" + type + "|" + cat;
+    if (seen.has(key)) { errors.push(`แถว ${n}: ซ้ำกับแถว ${seen.get(key)} (เดือน ${month} · ${type} · ${cat}) จะทำให้ยอดรวมเป็นสองเท่า`); continue; }
+    seen.set(key, n);
+    recs.push({ month, type, cat, a: nums[0], p: nums[1] });
+  }
+
+  if (!errors.length && !recs.length) errors.push('sheet "CashFlow" ไม่มีแถวข้อมูล');
+  if (errors.length) return { errors, warnings };
+
+  // คำเตือน (ไม่หยุดการแสดงผล)
+  const months = [...new Set(recs.map((r) => r.month))].sort();
+  const toIdx = (ym) => { const [y, m] = ym.split("-").map(Number); return y * 12 + m - 1; };
+  for (let k = toIdx(months[0]); k <= toIdx(months[months.length - 1]); k++) {
+    const ym = `${Math.floor(k / 12)}-${String((k % 12) + 1).padStart(2, "0")}`;
+    if (!months.includes(ym)) warnings.push(`ไม่มีข้อมูลเดือน ${ym} (${monthLabel(ym)}) ระหว่างเดือนอื่น — เงินสดสะสมอาจคลาดเคลื่อน`);
+  }
+  const counts = new Map(); recs.forEach((r) => counts.set(r.month, (counts.get(r.month) || 0) + 1));
+  const mode = [...counts.values()].sort((a, b) => counts.get(b) - counts.get(a))[0];
+  const freq = {}; counts.forEach((v) => (freq[v] = (freq[v] || 0) + 1));
+  const common = Number(Object.keys(freq).sort((a, b) => freq[b] - freq[a])[0]);
+  counts.forEach((v, m) => { if (v !== common) warnings.push(`เดือน ${m} มี ${v} รายการ ต่างจากเดือนอื่นที่ส่วนใหญ่มี ${common} รายการ — ตรวจว่าขาดหรือเกินหมวดหรือไม่`); });
+
+  return { errors, warnings, recs, opening, fundName, fiscal };
+}
+
+/* =====================================================================
+   2) คำนวณตัวชี้วัด
+   ===================================================================== */
+function buildModel(p) {
+  const months = [...new Set(p.recs.map((r) => r.month))].sort();
+  const data = months.map((m) => {
+    const rs = p.recs.filter((r) => r.month === m);
+    const sum = (t, f) => rs.filter((r) => r.type === t).reduce((s, r) => s + r[f], 0);
+    return { m, inA: sum(TYPE_IN, "a"), inP: sum(TYPE_IN, "p"), outA: sum(TYPE_OUT, "a"), outP: sum(TYPE_OUT, "p"), cats: rs };
+  });
+  let cA = p.opening, cP = p.opening;
+  data.forEach((d) => {
+    d.netA = d.inA - d.outA; d.netP = d.inP - d.outP;
+    cA += d.netA; cP += d.netP; d.cashA = cA; d.cashP = cP;
+  });
+  return { months, data, opening: p.opening, fundName: p.fundName, fiscal: p.fiscal };
+}
+
+function kpisFor(model, idx) {
+  const d = model.data[idx];
+  const upto = model.data.slice(0, idx + 1);
+  const avg = (f) => upto.reduce((s, x) => s + x[f], 0) / upto.length;
+  const avgOutA = avg("outA"), avgOutP = avg("outP");
+  return {
+    d,
+    cashA: d.cashA, cashP: d.cashP,
+    netA: d.netA, netP: d.netP,
+    inA: d.inA, inP: d.inP, outA: d.outA, outP: d.outP,
+    runA: avgOutA > 0 ? d.cashA / avgOutA : null,
+    runP: avgOutP > 0 ? d.cashP / avgOutP : null,
+    avgOutA,
+  };
+}
+
+function varianceRows(d) {      // ผลต่างที่ "เป็นผลดี" = บวก
+  return d.cats.map((c) => ({ ...c, fav: c.type === TYPE_IN ? c.a - c.p : c.p - c.a, diff: c.a - c.p }))
+               .sort((x, y) => x.fav - y.fav);
+}
+
+/* =====================================================================
+   3) แสดงผล
+   ===================================================================== */
+let model = null, sel = 0, charts = [], currentMeta = null;
+
+function deltaHtml(diff, higherIsGood, fmt, unit, tol) {
+  if (Math.abs(diff) < tol) return `<span class="flat">● ตรงตามแผน</span>`;
+  const up = diff > 0, good = up === higherIsGood;
+  const word = higherIsGood ? (up ? "สูงกว่าแผน" : "ต่ำกว่าแผน") : (up ? "เกินแผน" : "ต่ำกว่าแผน");
+  return `<span class="${good ? "good" : "bad"}">${up ? "▲" : "▼"} ${word} <span class="nw">${fmt(Math.abs(diff))} ${unit}</span></span>`;
+}
+
+function renderKpis(k) {
+  const pct = (a, p) => (p ? (a / p * 100).toFixed(1) + "%" : "–");
+  const tiles = [
+    { id: "cash", hero: true, label: "เงินสดคงเหลือสิ้นเดือน", val: fmtM(k.cashA), raw: k.cashA, unit: "ล้านบาท",
+      delta: deltaHtml(k.cashA - k.cashP, true, (n) => fmtM(n), "ล้านบาท", 0.5),
+      note: `${fmtB(k.cashA)} บาท · แผน ${fmtM(k.cashP)} ล้านบาท` },
+    { id: "net", label: "กระแสเงินสดสุทธิของเดือน (รับ − จ่าย)", val: fmtM(k.netA), raw: k.netA, unit: "ล้านบาท",
+      delta: deltaHtml(k.netA - k.netP, true, (n) => fmtM(n), "ล้านบาท", 0.5),
+      note: `แผน ${fmtM(k.netP)} ล้านบาท` },
+    { id: "in", label: "รับจริงของเดือน", val: fmtM(k.inA), raw: k.inA, unit: "ล้านบาท",
+      delta: deltaHtml(k.inA - k.inP, true, (n) => fmtM(n), "ล้านบาท", 0.5),
+      note: `${pct(k.inA, k.inP)} ของแผน (${fmtM(k.inP)})` },
+    { id: "out", label: "จ่ายจริงของเดือน", val: fmtM(k.outA), raw: k.outA, unit: "ล้านบาท",
+      delta: deltaHtml(k.outA - k.outP, false, (n) => fmtM(n), "ล้านบาท", 0.5),
+      note: `${pct(k.outA, k.outP)} ของแผน (${fmtM(k.outP)})` },
+    { id: "runway", label: "เงินสดพอจ่ายได้กี่เดือน", val: k.runA == null ? "–" : k.runA.toFixed(1), raw: k.runA, unit: "เดือน",
+      delta: k.runA == null || k.runP == null ? "" : deltaHtml(k.runA - k.runP, true, (n) => n.toFixed(1), "เดือน", 0.05),
+      note: `เงินสดคงเหลือ ÷ รายจ่ายจริงเฉลี่ย ${fmtM(k.avgOutA)} ล้านบาท/เดือน` },
+  ];
+  $("#kpis").innerHTML = tiles.map((t) => `
+    <div class="tile ${t.hero ? "hero" : ""}" data-kpi="${t.id}" data-raw="${t.raw == null ? "" : t.raw}">
+      <div class="label">${t.label}</div>
+      <div class="val">${t.val}<span class="unit">${t.unit}</span></div>
+      <div class="delta">${t.delta}</div>
+      <div class="note">${t.note}</div>
+    </div>`).join("");
+}
+
+function renderHeadline(k, rows) {
+  const lbl = monthLabel(k.d.m);
+  const worst = rows[0];
+  const cmp = (diff, goodWordUp, goodWordDown) => Math.abs(diff) < 0.5 ? "ตรงตามแผน" : (diff > 0 ? goodWordUp : goodWordDown) + " " + fmtM(Math.abs(diff)) + " ล้านบาท";
+  let s = `เดือน <b>${lbl}</b>: เงินสดคงเหลือ <b>${fmtM(k.cashA)} ล้านบาท</b> (${cmp(k.cashA - k.cashP, "สูงกว่าแผน", "ต่ำกว่าแผน")}) · ` +
+          `รับจริง ${k.inP ? (k.inA / k.inP * 100).toFixed(1) : "–"}% ของแผน · จ่ายจริง ${k.outP ? (k.outA / k.outP * 100).toFixed(1) : "–"}% ของแผน`;
+  if (worst && worst.fav < -0.5) {
+    s += ` · <b>ควรดูเป็นพิเศษ:</b> ${esc(worst.cat)} ${worst.type === TYPE_IN ? "รับต่ำกว่าแผน" : "จ่ายเกินแผน"} ${fmtM(-worst.fav)} ล้านบาท`;
+  } else s += " · ทุกหมวดเป็นไปตามหรือดีกว่าแผน";
+  $("#headline").innerHTML = s;
+}
+
+function renderVariance(rows, lbl) {
+  $("#varTitle").textContent = `ผลต่างจากแผนรายหมวด · ${lbl}`;
+  const lo = Math.min(0, ...rows.map((r) => r.fav)), hi = Math.max(0, ...rows.map((r) => r.fav));
+  const span = hi - lo || 1, zero = (-lo / span) * 100;
+  $("#varRows").innerHTML = rows.map((r) => {
+    const pos = r.fav >= 0;
+    const w = Math.abs(r.fav) / span * 100;
+    const left = pos ? zero : zero - w;
+    const tip = `${r.type} · ${r.cat}\nจริง ${fmtB(r.a)} บาท\nแผน ${fmtB(r.p)} บาท\nผลต่าง ${sgnB(r.diff)} บาท`;
+    return `<div class="vrow" title="${esc(tip)}">
+      <div class="vname"><small>${r.type}</small>${esc(r.cat)}</div>
+      <div class="vtrack"><span class="vzero" style="left:${zero}%"></span><span class="vbar ${pos ? "pos" : "neg"}" style="left:${left}%;width:${w}%"></span></div>
+      <div class="vval ${Math.abs(r.fav) < 0.5 ? "flat" : pos ? "good" : "bad"}">${Math.abs(r.fav) < 0.5 ? "●" : pos ? "▲" : "▼"} ${sgnM(r.fav)}</div>
+    </div>`;
+  }).join("");
+}
+
+function renderCatTable(d, lbl) {
+  $("#catTitle").textContent = `รายละเอียดรายหมวด · ${lbl}`;
+  const pct = (a, p) => (p ? (a / p * 100).toFixed(1) + "%" : "–");
+  // ลูกศร = ทิศทางของ (จริง − แผน); สีและคำในช่องสถานะ = ดี/ไม่ดี (รับสูง = ดี, จ่ายสูง = ไม่ดี)
+  const cell = (type, a, p) => {
+    const diff = a - p, flat = Math.abs(diff) < 0.5;
+    const good = (type === TYPE_IN) === (diff > 0);
+    const cls = flat ? "flat" : good ? "good" : "bad";
+    const word = flat ? "ตรงตามแผน" : good ? "ดีกว่าแผน" : "แย่กว่าแผน";
+    return `<td class="${cls}">${flat ? "●" : diff > 0 ? "▲" : "▼"} ${sgnB(diff)}</td><td>${pct(a, p)}</td><td class="${cls}">${word}</td>`;
+  };
+  let h = `<thead><tr><th>หมวด</th><th>จริง (บาท)</th><th>แผน (บาท)</th><th>ผลต่าง (บาท)</th><th>% ของแผน</th><th>สถานะ</th></tr></thead><tbody>`;
+  for (const [type, ta, tp] of [[TYPE_IN, d.inA, d.inP], [TYPE_OUT, d.outA, d.outP]]) {
+    h += `<tr class="grp"><td colspan="6">${type}</td></tr>`;
+    d.cats.filter((c) => c.type === type).forEach((c) => {
+      h += `<tr><td>${esc(c.cat)}</td><td>${fmtB(c.a)}</td><td>${fmtB(c.p)}</td>${cell(type, c.a, c.p)}</tr>`;
+    });
+    h += `<tr class="sum"><td>รวม${type}</td><td>${fmtB(ta)}</td><td>${fmtB(tp)}</td>${cell(type, ta, tp)}</tr>`;
+  }
+  h += `<tr class="sum"><td>กระแสเงินสดสุทธิ (รับ − จ่าย)</td><td>${sgnB(d.netA)}</td><td>${sgnB(d.netP)}</td>${cell(TYPE_IN, d.netA, d.netP).replace(/<td>[^<]*<\/td>/, "<td></td>")}</tr></tbody>`;
+  $("#catTable").innerHTML = h;
+}
+
+function renderMonthTable() {
+  let h = `<thead><tr><th>เดือน</th><th>รับจริง</th><th>รับแผน</th><th>จ่ายจริง</th><th>จ่ายแผน</th><th>สุทธิจริง</th><th>สุทธิแผน</th><th>เงินสดคงเหลือ (จริง)</th><th>เงินสดคงเหลือ (แผน)</th></tr></thead><tbody>`;
+  model.data.forEach((d, i) => {
+    h += `<tr class="${i === sel ? "sel" : ""}"><td>${monthLabel(d.m)}</td><td>${fmtB(d.inA)}</td><td>${fmtB(d.inP)}</td><td>${fmtB(d.outA)}</td><td>${fmtB(d.outP)}</td><td>${sgnB(d.netA)}</td><td>${sgnB(d.netP)}</td><td>${fmtB(d.cashA)}</td><td>${fmtB(d.cashP)}</td></tr>`;
+  });
+  $("#monthTable").innerHTML = h + "</tbody>";
+}
+
+/* ---------- กราฟ (Chart.js) ---------- */
+const bandPlugin = {
+  id: "band",
+  beforeDatasetsDraw(chart) {
+    const x = chart.scales.x, a = chart.chartArea;
+    if (!x || !a || sel < 0) return;
+    const c = x.getPixelForValue(sel);
+    const n = model.data.length;
+    const w = n > 1 ? Math.abs(x.getPixelForValue(1) - x.getPixelForValue(0)) : a.right - a.left;
+    const ctx = chart.ctx;
+    ctx.save(); ctx.fillStyle = cssVar("--band");
+    ctx.fillRect(c - w / 2, a.top, w, a.bottom - a.top);
+    ctx.restore();
+  },
+};
+
+function baseOptions(extra) {
+  const ink2 = cssVar("--ink2"), muted = cssVar("--muted"), grid = cssVar("--grid"), axis = cssVar("--axis");
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: "index", intersect: false },
+    font: { family: getComputedStyle(document.body).fontFamily },
+    plugins: {
+      legend: { position: "top", align: "start", labels: { usePointStyle: true, boxWidth: 8, boxHeight: 8, color: ink2, padding: 14 } },
+      tooltip: { backgroundColor: cssVar("--surface"), titleColor: cssVar("--ink"), bodyColor: ink2, borderColor: axis, borderWidth: 1, padding: 10, boxPadding: 4, ...(extra && extra.tooltip) },
+    },
+    scales: {
+      x: { offset: true, grid: { display: false }, border: { color: axis }, ticks: { color: muted, autoSkip: true, maxTicksLimit: window.innerWidth < 560 ? 6 : 12, maxRotation: 0, minRotation: 0 } },
+      y: { grid: { color: grid }, border: { display: false }, ticks: { color: muted, callback: (v) => v.toLocaleString("en-US") } },
+    },
+  };
+}
+
+function drawCharts() {
+  charts.forEach((c) => c.destroy()); charts = [];
+  const labels = model.data.map((d, i) => {
+    const mon = TH_MONTHS[Number(d.m.slice(5)) - 1];
+    return (i === 0 || d.m.endsWith("-01")) ? [mon, String(Number(d.m.slice(0, 4)) + 543)] : mon;
+  });
+  const M = (f) => model.data.map((d) => d[f] / 1e6);
+  const surface = cssVar("--surface"), ink = cssVar("--ink");
+
+  const o1 = baseOptions({ tooltip: { callbacks: {
+    title: (it) => monthLabel(model.data[it[0].dataIndex].m),
+    label: (it) => ` ${it.dataset.label}: ${it.parsed.y.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ล้านบาท`,
+    afterBody: (it) => { const d = model.data[it[0].dataIndex]; return [`แผน รับ ${fmtM(d.inP)} · จ่าย ${fmtM(d.outP)} · สุทธิ ${fmtM(d.netP)}`]; },
+  } } });
+  charts.push(new Chart($("#chFlow"), {
+    data: { labels, datasets: [
+      { type: "bar", label: "รับจริง", data: M("inA"), backgroundColor: cssVar("--in"), borderColor: surface, borderWidth: 2, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: "bottom", categoryPercentage: .75, barPercentage: .95, pointStyle: "rectRounded" },
+      { type: "bar", label: "จ่ายจริง", data: M("outA"), backgroundColor: cssVar("--out"), borderColor: surface, borderWidth: 2, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: "bottom", categoryPercentage: .75, barPercentage: .95, pointStyle: "rectRounded" },
+      { type: "line", label: "สุทธิ (รับ − จ่าย)", data: M("netA"), borderColor: ink, backgroundColor: ink, borderWidth: 2, pointRadius: 4, pointBackgroundColor: ink, pointBorderColor: surface, pointBorderWidth: 2, tension: 0, pointStyle: "circle" },
+    ] },
+    options: o1, plugins: [bandPlugin],
+  }));
+
+  const o2 = baseOptions({ tooltip: { callbacks: {
+    title: (it) => monthLabel(model.data[it[0].dataIndex].m),
+    label: (it) => ` ${it.dataset.label}: ${it.parsed.y.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ล้านบาท`,
+  } } });
+  charts.push(new Chart($("#chCash"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "เงินสดจริง", data: M("cashA"), borderColor: cssVar("--in"), backgroundColor: cssVar("--in"), borderWidth: 2, pointRadius: 4, pointBackgroundColor: cssVar("--in"), pointBorderColor: surface, pointBorderWidth: 2, tension: 0 },
+      { label: "เงินสดตามแผน", data: M("cashP"), borderColor: cssVar("--plan"), backgroundColor: cssVar("--plan"), borderWidth: 2, borderDash: [6, 4], pointRadius: 0, pointHoverRadius: 4, tension: 0 },
+    ] },
+    options: o2, plugins: [bandPlugin],
+  }));
+}
+
+/* ---------- ประกอบหน้า ---------- */
+function renderAll() {
+  const k = kpisFor(model, sel), rows = varianceRows(k.d), lbl = monthLabel(k.d.m);
+  renderKpis(k); renderHeadline(k, rows); renderVariance(rows, lbl); renderCatTable(k.d, lbl); renderMonthTable();
+  drawCharts();
+}
+
+function showModel(parsed, meta) {
+  model = buildModel(parsed); currentMeta = meta;
+  sel = model.data.length - 1;                                  // ค่าเริ่มต้น = เดือนล่าสุดในไฟล์
+  $("#monthSel").innerHTML = model.data.map((d, i) => `<option value="${i}">${monthLabel(d.m)}</option>`).join("");
+  $("#monthSel").value = String(sel);
+  $("#monthWrap").classList.remove("hidden");
+  $("#subtitle").textContent = [model.fundName && `หมวดเงิน: ${model.fundName}`, model.fiscal && `ปีงบประมาณ ${model.fiscal}`].filter(Boolean).join(" · ") || "รายงานกระแสเงินสด";
+  const last = model.data[model.data.length - 1].m;
+  const upd = $("#updChip"); upd.classList.remove("hidden");
+  upd.textContent = `ข้อมูลถึง ${monthLabel(last)}` + (meta.modified ? ` · ไฟล์อัปเดต ${thDateTime(meta.modified)}` : "");
+  $("#errBox").classList.add("hidden");
+  const w = $("#warnBox");
+  if (parsed.warnings.length) { w.innerHTML = `<h3>⚠ ข้อควรตรวจสอบ (ยังแสดงตัวเลขได้)</h3><ul>${parsed.warnings.slice(0, 8).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`; w.classList.remove("hidden"); }
+  else w.classList.add("hidden");
+  $("#app").classList.remove("hidden");
+  renderAll();
+}
+
+function showFatal(errors, meta) {
+  model = null; charts.forEach((c) => c.destroy()); charts = [];
+  $("#app").classList.add("hidden"); $("#warnBox").classList.add("hidden"); $("#monthWrap").classList.add("hidden"); $("#updChip").classList.add("hidden");
+  $("#subtitle").textContent = "ไม่สามารถแสดงรายงานได้";
+  const shown = errors.slice(0, 12), more = errors.length - shown.length;
+  $("#errBox").innerHTML = `<h3>⛔ ไฟล์ข้อมูลไม่ถูกต้อง — จึงยังไม่แสดงตัวเลข</h3>
+    <div>เพื่อไม่ให้ตัวเลขที่ผิดไปถึงผู้บริหาร กรุณาให้เจ้าของไฟล์ (Data Owner) แก้ไฟล์ให้ตรงกติกาในแผ่น "อ่านก่อน" แล้วอัปโหลดใหม่</div>
+    <ul>${shown.map((e) => `<li>${esc(e)}</li>`).join("")}${more > 0 ? `<li>…และอีก ${more} รายการ</li>` : ""}</ul>`;
+  $("#errBox").classList.remove("hidden");
+}
+
+function handleBuffer(buf, meta) {
+  let wb;
+  try { wb = XLSX.read(buf, { type: "array", cellDates: true }); }
+  catch (e) { showFatal(["เปิดไฟล์ไม่ได้ — ไฟล์อาจไม่ใช่ .xlsx หรือไฟล์เสียหาย"]); return; }
+  const parsed = parseWorkbook(wb);
+  if (parsed.errors.length) showFatal(parsed.errors, meta);
+  else showModel(parsed, meta);
+}
+
+/* ---------- โหลดจากเว็บ / จากไฟล์ในเครื่อง ---------- */
+async function loadFromWeb() {
+  $("#localBanner").classList.add("hidden");
+  $("#srcNote").textContent = "ที่มาข้อมูล: " + DATA_URL + " (โหลดใหม่ทุกครั้งที่เปิดหน้านี้)";
+  try {
+    const res = await fetch(DATA_URL + "?v=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const lm = res.headers.get("last-modified");
+    handleBuffer(await res.arrayBuffer(), { name: DATA_URL, modified: lm ? new Date(lm) : null, local: false });
+  } catch (e) {
+    showFatal([
+      `โหลดไฟล์ ${DATA_URL} ไม่ได้ (${e.message})`,
+      "ตรวจว่ามีไฟล์ชื่อ cashflow.xlsx อยู่ในโฟลเดอร์ data ของ repository",
+      "ถ้าเปิดไฟล์ index.html โดยดับเบิลคลิกจากเครื่อง จะโหลดไฟล์ข้อมูลไม่ได้ ให้เปิดผ่านลิงก์ GitHub Pages หรือใช้ปุ่ม “ทดสอบไฟล์ Excel ในเครื่องของฉัน” ด้านล่าง",
+    ]);
+  }
+}
+
+$("#filePick").addEventListener("change", (ev) => {
+  const f = ev.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    $("#localBannerText").textContent = `กำลังดูไฟล์ทดสอบ “${f.name}” — แสดงเฉพาะในเครื่องของคุณ ไม่ได้เปลี่ยนข้อมูลบนเว็บ`;
+    $("#localBanner").classList.remove("hidden");
+    handleBuffer(rd.result, { name: f.name, modified: f.lastModified ? new Date(f.lastModified) : null, local: true });
+  };
+  rd.readAsArrayBuffer(f); ev.target.value = "";
+});
+$("#backToWeb").addEventListener("click", loadFromWeb);
+$("#monthSel").addEventListener("change", (ev) => { sel = Number(ev.target.value); if (model) renderAll(); });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (model) renderAll(); });
+
+if (SHOW_DEMO_NOTICE) $("#demoChip").classList.remove("hidden");
+loadFromWeb();
+</script>
+</body>
+</html>
